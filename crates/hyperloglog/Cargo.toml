@@ -1,7 +1,6 @@
 [package]
 name = "hyperloglog"
 version = "0.1.0"
-authors = ["Joshua Lockerman <josh@timescale.com>"]
 edition = "2018"
 
 [dependencies]
@@ -10,3 +9,6 @@ serde = { version = "1.0", features = ["derive"] }
 [dependencies.bytecount]
 version = "0.6"
 features = ["runtime-dispatch-simd"]
+
+[dev-dependencies]
+fnv = "1.0.3"

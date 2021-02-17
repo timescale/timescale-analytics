@@ -533,12 +533,32 @@ mod tests {
     }
 
     #[test]
+    fn add_b4_n1k_fnv() {
+        let mut hll: HyperLogLogger::<_, fnv::FnvBuildHasher> = HyperLogLogger::with_hash(4, Default::default());
+        for i in 0..1000 {
+            hll.add(&i);
+        }
+        assert_eq!(hll.count(), 102);
+        assert!(!hll.is_empty());
+    }
+
+    #[test]
     fn add_b8_n1k() {
         let mut hll = HyperLogLogger::new(8);
         for i in 0..1000 {
             hll.add(&i);
         }
         assert_eq!(hll.count(), 964);
+        assert!(!hll.is_empty());
+    }
+
+    #[test]
+    fn add_b8_n1k_fnv() {
+        let mut hll: HyperLogLogger::<_, fnv::FnvBuildHasher> = HyperLogLogger::with_hash(8, Default::default());
+        for i in 0..1000 {
+            hll.add(&i);
+        }
+        assert_eq!(hll.count(), 1585);
         assert!(!hll.is_empty());
     }
 

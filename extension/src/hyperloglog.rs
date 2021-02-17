@@ -1,5 +1,4 @@
 use std::{
-    borrow::Cow,
     convert::TryInto,
     hash::{BuildHasher, Hasher},
     mem::size_of,
@@ -21,11 +20,11 @@ use crate::{
     serialization::{PgCollationId, ShortTypeId},
 };
 
-use hyperloglog::{HyperLogLog as HLL, HyperLogLogger};
+use hyperloglogplusplus::{HyperLogLog as HLL, HyperLogLogStorage};
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone)]
 pub struct HyperLogLogTrans {
-    logger: HyperLogLogger<Datum, DatumHashBuilder>,
+    logger: HLL<'static, Datum, DatumHashBuilder>,
 }
 
 #[allow(non_camel_case_types)]
@@ -56,7 +55,7 @@ pub fn hyperloglog_trans(
                     let collation = get_collation(fc);
                     let hasher = DatumHashBuilder::from_type_id(typ, collation);
                     let trans = HyperLogLogTrans {
-                        logger: HyperLogLogger::with_hash(b as usize, hasher),
+                        logger: HLL::new(b as u8, hasher),
                     };
                     trans.into()
                 }
@@ -80,10 +79,8 @@ pub fn hyperloglog_combine(
             (None, Some(state2)) => Some(state2.clone().into()),
             (Some(state1), None) => Some(state1.clone().into()),
             (Some(state1), Some(state2)) => {
-                let logger = HLL::merge(
-                    &state1.logger.as_hyperloglog(),
-                    &state2.logger.as_hyperloglog(),
-                );
+                let mut logger = state1.logger.clone();
+                logger.merge_in(&state2.logger);
                 Some(HyperLogLogTrans { logger }.into())
             }
         })
@@ -109,13 +106,39 @@ pub fn hyperloglog_deserialize(
 pg_type! {
     #[derive(Debug)]
     struct HyperLogLog<'input> {
-        // Oids are stored in postgres arrays, so it should be safe to store them
-        // in our types as long as we do send/recv and in/out correctly
-        // see https://github.com/postgres/postgres/blob/b8d0cda53377515ac61357ec4a60e85ca873f486/src/include/utils/array.h#L90
-        element_type: ShortTypeId,
-        collation: PgCollationId,
-        b: u32,
-        registers: [u8; (1 as usize) << self.b],
+        #[flat_serialize::flatten]
+        log: Storage<'input>,
+    }
+}
+
+flat_serialize_macro::flat_serialize! {
+    #[derive(Debug, Serialize, Deserialize)]
+    #[flat_serialize::field_attr(
+        fixed = r##"#[serde(deserialize_with = "crate::serialization::serde_reference_adaptor::deserialize")]"##,
+        variable = r##"#[serde(deserialize_with = "crate::serialization::serde_reference_adaptor::deserialize_slice")]"##,
+    )]
+    enum Storage<'a> {
+        storage_kind: u64,
+        Sparse: 1 {
+            num_compressed: u64,
+            // Oids are stored in postgres arrays, so it should be safe to store them
+            // in our types as long as we do send/recv and in/out correctly
+            // see https://github.com/postgres/postgres/blob/b8d0cda53377515ac61357ec4a60e85ca873f486/src/include/utils/array.h#L90
+            element_type: ShortTypeId,
+            collation: PgCollationId,
+            compressed_bytes: u32,
+            precision: u8,
+            compressed: [u8; self.compressed_bytes],
+        },
+        Dense: 2 {
+            // Oids are stored in postgres arrays, so it should be safe to store them
+            // in our types as long as we do send/recv and in/out correctly
+            // see https://github.com/postgres/postgres/blob/b8d0cda53377515ac61357ec4a60e85ca873f486/src/include/utils/array.h#L90
+            element_type: ShortTypeId,
+            collation: PgCollationId,
+            precision: u8,
+            registers: [u8; 1 + (1usize << self.precision) * 6 / 8] //TODO should we just store len?
+        },
     }
 }
 
@@ -136,12 +159,12 @@ fn hyperloglog_final(
 ) -> Option<toolkit_experimental::HyperLogLog<'static>> {
     unsafe {
         in_aggregate_context(fcinfo, || {
-            let state = match state {
+            let mut state = match state {
                 None => return None,
                 Some(state) => state,
             };
 
-            flatten_log(state.logger.as_hyperloglog()).into()
+            flatten_log(&mut state.logger).into()
         })
     }
 }
@@ -165,68 +188,91 @@ pub fn hyperloglog_count<'input>(
     hyperloglog: toolkit_experimental::HyperLogLog<'input>
 ) -> i64 {
     // count does not depend on the type parameters
-    HLL::<()> {
-        registers: hyperloglog.registers,
-        b: hyperloglog.b as _,
-        buildhasher: Default::default(),
-        phantom: Default::default(),
-    }
-    .count()
+    let log = match hyperloglog.log {
+        Storage::Sparse { num_compressed, precision, compressed, .. } =>
+            HLL::<Datum, ()>::from_sparse_parts(compressed, num_compressed, precision, ()),
+        Storage::Dense { precision, registers, .. } =>
+        HLL::<Datum, ()>::from_dense_parts(registers, precision, ()),
+    };
+    log.immutable_estimate_count() as i64
 }
 
-#[pg_extern(schema = "toolkit_experimental")]
+#[pg_extern(name="rollup", schema = "toolkit_experimental")]
 pub fn hyperloglog_union<'input>(
     a: toolkit_experimental::HyperLogLog<'input>,
     b: toolkit_experimental::HyperLogLog<'input>,
 ) -> toolkit_experimental::HyperLogLog<'static> {
-    let a = HLL::<'_, Datum, DatumHashBuilder> {
-        registers: a.registers,
-        b: a.b as _,
-        buildhasher: unsafe {
-            Cow::Owned(DatumHashBuilder::from_type_id(
-                a.element_type.0,
-                a.collation.to_option_oid(),
-            ))
-        },
-        phantom: Default::default(),
-    };
-    let b = HLL::<'_, Datum, DatumHashBuilder> {
-        registers: b.registers,
-        b: b.b as _,
-        buildhasher: unsafe {
-            Cow::Owned(DatumHashBuilder::from_type_id(
-                b.element_type.0,
-                b.collation.to_option_oid(),
-            ))
-        },
-        phantom: Default::default(),
-    };
-    if a.buildhasher().type_id != b.buildhasher().type_id {
-        // TODO
+    //TODO check type id and collation for equality
+    let a = unflatten_log(a);
+    let b = unflatten_log(b);
+    if a.buildhasher.type_id != b.buildhasher.type_id {
         error!("missmatched types")
     }
-
-    let merged = HLL::merge(&a, &b);
-    flatten_log(merged.as_hyperloglog())
+    // TODO error on mismatched collation?
+    let mut a = a.clone();
+    a.merge_in(&b);
+    flatten_log(&mut a)
 }
 
-fn flatten_log(hyperloglog: HLL<Datum, DatumHashBuilder>)
+fn flatten_log(hyperloglog: &mut HLL<Datum, DatumHashBuilder>)
 -> toolkit_experimental::HyperLogLog<'static> {
     let (element_type, collation) = {
-        let hasher = hyperloglog.buildhasher();
+        let hasher = &hyperloglog.buildhasher;
         (ShortTypeId(hasher.type_id), PgCollationId(hasher.collation))
     };
 
     // we need to flatten the vector to a single buffer that contains
     // both the size, the data, and the varlen header
-    unsafe {
-        flatten!(HyperLogLog {
-            element_type: element_type,
-            collation: collation,
-            b: hyperloglog.b as u32,
-            registers: hyperloglog.registers,
-        })
-        .into()
+
+    let flat = match hyperloglog.to_parts() {
+        HyperLogLogStorage::Sparse(sparse) => unsafe {
+            flatten!(HyperLogLog {
+                log: Storage::Sparse {
+                    element_type: element_type,
+                    collation: collation,
+                    num_compressed: sparse.num_compressed,
+                    precision: sparse.precision,
+                    compressed_bytes: sparse.compressed.num_bytes() as u32,
+                    compressed: sparse.compressed.bytes(),
+                }
+            })
+        },
+        HyperLogLogStorage::Dense(dense) => unsafe {
+            // TODO check that precision and length match?
+            flatten!(HyperLogLog {
+                log: Storage::Dense {
+                    element_type: element_type,
+                    collation: collation,
+                    precision: dense.precision,
+                    registers: dense.registers.bytes(),
+                }
+            })
+        },
+    };
+    flat.into()
+}
+
+fn unflatten_log<'i>(hyperloglog: HyperLogLog<'i>) -> HLL<'i, Datum, DatumHashBuilder> {
+    match hyperloglog.log {
+        Storage::Sparse {
+            num_compressed,
+            precision,
+            compressed,
+            element_type,
+            collation,
+            compressed_bytes: _
+        } => HLL::<Datum, DatumHashBuilder>::from_sparse_parts(
+            compressed,
+            num_compressed,
+            precision,
+            unsafe { DatumHashBuilder::from_type_id(element_type.0, Some(collation.0)) }
+        ),
+        Storage::Dense { precision, registers, element_type, collation  } =>
+            HLL::<Datum, DatumHashBuilder>::from_dense_parts(
+                registers,
+                precision,
+                unsafe { DatumHashBuilder::from_type_id(element_type.0, Some(collation.0)) }
+            ),
     }
 }
 
@@ -394,7 +440,20 @@ mod tests {
                 .first()
                 .get_one::<String>();
 
-            let expected = "{\"version\":1,\"element_type\":\"FLOAT8\",\"collation\":null,\"b\":5,\"registers\":[2,5,2,3,2,6,3,2,1,3,5,3,3,3,3,3,6,3,0,4,3,6,0,2,6,1,2,9,3,10,2,2]}";
+            let expected = "{\
+                \"version\":1,\
+                \"log\":{\
+                    \"Dense\":{\
+                        \"element_type\":\"FLOAT8\",\
+                        \"collation\":null,\
+                        \"precision\":5,\
+                        \"registers\":[\
+                            20,64,132,12,81,1,8,64,133,4,64,136,4,82,3,12,17,\
+                            65,24,32,197,16,32,132,255\
+                        ]\
+                    }\
+                }\
+            }";
             assert_eq!(text.unwrap(), expected);
 
             let count = client
@@ -405,7 +464,7 @@ mod tests {
                     FROM generate_series(1, 100) v", None, None)
                 .first()
                 .get_one::<i32>();
-            assert_eq!(count, Some(108));
+            assert_eq!(count, Some(132));
 
             let count2 = client
                 .select(
@@ -432,7 +491,20 @@ mod tests {
                 .first()
                 .get_one::<String>();
 
-            let expected = "{\"version\":1,\"element_type\":\"INT4\",\"collation\":null,\"b\":5,\"registers\":[6,2,6,3,7,2,5,3,2,3,4,4,0,2,2,3,1,4,2,2,2,2,3,2,2,5,1,3,3,3,3,3]}";
+            let expected = "{\
+                \"version\":1,\
+                \"log\":{\
+                    \"Dense\":{\
+                        \"element_type\":\"INT4\",\
+                        \"collation\":null,\
+                        \"precision\":5,\
+                        \"registers\":[\
+                            8,49,0,12,32,129,24,32,195,16,33,2,12,1,68,4,16,\
+                            196,20,64,133,8,17,67,255\
+                        ]\
+                    }\
+                }\
+            }";
             assert_eq!(text.unwrap(), expected);
 
             let count = client
@@ -442,7 +514,7 @@ mod tests {
                 ) FROM generate_series(1, 100) v", None, None)
                 .first()
                 .get_one::<i32>();
-            assert_eq!(count, Some(113));
+            assert_eq!(count, Some(96));
 
             let count2 = client
                 .select(
@@ -473,7 +545,19 @@ mod tests {
                 .get_one::<String>();
 
             let default_collation = serde_json::to_string(&PgCollationId(100)).unwrap();
-            let expected = format!("{{\"version\":1,\"element_type\":\"TEXT\",\"collation\":{},\"b\":5,\"registers\":[4,2,1,1,5,2,5,1,6,5,6,1,3,3,4,3,2,3,0,3,3,5,2,3,8,5,2,1,4,1,4,3]}}", default_collation);
+            let expected = format!("{{\
+                \"version\":1,\
+                \"log\":{{\
+                        \"Dense\":{{\
+                            \"element_type\":\"TEXT\",\
+                            \"collation\":{},\
+                            \"precision\":5,\
+                            \"registers\":[\
+                                12,33,3,8,33,4,20,50,3,12,32,133,4,32,67,8,48,\
+                                128,8,33,4,8,32,197,255\
+                        ]}}\
+                    }}\
+                }}", default_collation);
             assert_eq!(text.unwrap(), expected);
 
             let count = client
@@ -482,7 +566,7 @@ mod tests {
                 ) FROM generate_series(1, 100) v", None, None)
                 .first()
                 .get_one::<i32>();
-            assert_eq!(count, Some(106));
+            assert_eq!(count, Some(111));
 
             let count2 = client
                 .select(
@@ -515,7 +599,7 @@ mod tests {
 
                 let text = client
                     .select(
-                        "SELECT toolkit_experimental.hyperloglog_union(\
+                        "SELECT toolkit_experimental.rollup(\
                             toolkit_experimental.hyperloglog(32, v::text), \
                             toolkit_experimental.hyperloglog(32, v::text)\
                         )::TEXT FROM generate_series(1, 100) v",
@@ -532,7 +616,7 @@ mod tests {
                 // differing unions should be a sum of the distinct counts
                 let query =
                     "SELECT toolkit_experimental.hyperloglog_count(\
-                        toolkit_experimental.hyperloglog_union(\
+                        toolkit_experimental.rollup(\
                             (SELECT toolkit_experimental.hyperloglog(32, v::text) FROM generate_series(1, 100) v),\
                             (SELECT toolkit_experimental.hyperloglog(32, v::text) FROM generate_series(50, 150) v)\
                         )\
@@ -546,7 +630,7 @@ mod tests {
                     .first()
                     .get_one::<i64>();
 
-                assert_eq!(count, Some(139));
+                assert_eq!(count, Some(152));
             }
 
         });
