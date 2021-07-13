@@ -4,18 +4,20 @@ use std::{slice};
 use pgx::*;
 
 use crate::{
-    aggregate_utils::in_aggregate_context, json_inout_funcs, pg_type, flatten, palloc::Internal,
+    aggregate_utils::in_aggregate_context, pg_type, flatten, palloc::Internal,
 };
 
 use time_series::{TSPoint, TimeSeries as InternalTimeSeries, ExplicitTimeSeries, NormalTimeSeries, GapfillMethod};
 
 use flat_serialize::*;
 
+mod pipeline;
+
 #[allow(non_camel_case_types)]
 type bytea = pg_sys::Datum;
 
 pg_type! {
-    #[derive(Debug)]
+    #[derive(Debug, Copy)]
     struct TimeSeries<'input> {
         series: enum SeriesType<'input> {
             type_id: u64,
@@ -37,7 +39,54 @@ pg_type! {
         },
     }
 }
-json_inout_funcs!(TimeSeries);
+
+impl<'input> InOutFuncs for TimeSeries<'input> {
+    fn output(&self, buffer: &mut StringInfo) {
+        use crate::serialization::{EncodedStr::*, str_to_db_encoding};
+
+        // TODO remove extra allocation
+        // FIXME print timestamps as times, not integers
+        let serializer: Vec<_> = self.to_internal_time_series()
+            .iter()
+            // .map(|point| (point.ts, point.val))
+            .collect();
+
+        let stringified = serde_json::to_string(&*serializer).unwrap();
+        match str_to_db_encoding(&stringified) {
+            Utf8(s) => buffer.push_str(s),
+            Other(s) => buffer.push_bytes(s.to_bytes()),
+        }
+    }
+
+    fn input(input: &std::ffi::CStr) -> Self
+    where
+        Self: Sized,
+    {
+        use crate::serialization::str_from_db_encoding;
+
+        // SAFETY our serde shims will allocate and leak copies of all
+        // the data, so the lifetimes of the borrows aren't actually
+        // relevant to the output lifetime
+        // TODO reduce allocation
+        let series: Vec<TSPoint> = unsafe {
+            unsafe fn extend_lifetime(s: &str) -> &'static str {
+                std::mem::transmute(s)
+            }
+            let input = extend_lifetime(str_from_db_encoding(input));
+            serde_json::from_str(input).unwrap()
+        };
+        unsafe {
+            flatten! {
+                TimeSeries {
+                    series: SeriesType::ExplicitSeries {
+                        num_points: series.len() as u64,
+                        points: &*series,
+                    }
+                }
+            }
+        }
+    }
+}
 
 // hack to allow us to qualify names with "toolkit_experimental"
 // so that pgx generates the correct SQL

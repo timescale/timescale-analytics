@@ -6,6 +6,7 @@ edition = "2018"
 
 [dependencies]
 ordered-float = "1.0"
+serde = "1.0"
 
 [dev-dependencies]
 flat_serialize_macro = {path="../flat_serialize_macro"}

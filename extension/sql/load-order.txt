@@ -2,7 +2,6 @@ range.generated.sql
 tdigest.generated.sql
 hyperloglog.generated.sql
 uddsketch.generated.sql
-triggers.generated.sql
 time_weighted_average.generated.sql
 time_series.generated.sql
 lttb.generated.sql
@@ -10,6 +9,5 @@ asap.generated.sql
 counter_agg.generated.sql
 utilities.generated.sql
 stats_agg.generated.sql
-schema_test.generated.sql
-serialization_collations.generated.sql
-serialization_types.generated.sql
+time_series_pipeline.generated.sql
+triggers.generated.sql

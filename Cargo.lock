@@ -467,6 +467,7 @@ version = "0.1.0"
 dependencies = [
  "flat_serialize_macro",
  "ordered-float",
+ "serde",
 ]
 
 [[package]]

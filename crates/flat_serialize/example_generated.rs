@@ -1,4 +1,6 @@
-#[derive(Copy, Clone, Debug)]
+#![allow(unused_imports)]
+use crate as flat_serialize;
+#[derive(Clone, Debug)]
 pub struct Basic<'input> {
     pub header: u64,
     pub data_len: u32,
@@ -286,7 +288,7 @@ unsafe impl<'input> flat_serialize::FlatSerializable<'input> for Basic<'input> {
     ) -> &'out mut [std::mem::MaybeUninit<u8>] {
         let total_len = self.len();
         let (mut input, rem) = input.split_at_mut(total_len);
-        let &Basic {
+        let Basic {
             header,
             data_len,
             array,
@@ -303,12 +305,12 @@ unsafe impl<'input> flat_serialize::FlatSerializable<'input> for Basic<'input> {
             input = array.fill_slice(input);
         };
         unsafe {
-            let count = (data_len) as usize;
-            input = <_ as flat_serialize::Slice<'_>>::fill_slice(&data, count, input);
+            let count = (*data_len) as usize;
+            input = <_ as flat_serialize::Slice<'_>>::fill_slice(data, count, input);
         };
         unsafe {
-            let count = ((data_len) / 3) as usize;
-            input = <_ as flat_serialize::Slice<'_>>::fill_slice(&data2, count, input);
+            let count = ((*data_len) / 3) as usize;
+            input = <_ as flat_serialize::Slice<'_>>::fill_slice(data2, count, input);
         }
         debug_assert_eq!(input.len(), 0);
         rem
@@ -316,7 +318,7 @@ unsafe impl<'input> flat_serialize::FlatSerializable<'input> for Basic<'input> {
     #[allow(unused_assignments, unused_variables)]
     #[inline(always)]
     fn len(&self) -> usize {
-        let &Basic {
+        let Basic {
             header,
             data_len,
             array,
@@ -324,14 +326,14 @@ unsafe impl<'input> flat_serialize::FlatSerializable<'input> for Basic<'input> {
             data2,
         } = self;
         0usize
-            + <u64 as flat_serialize::FlatSerializable>::len(&header)
-            + <u32 as flat_serialize::FlatSerializable>::len(&data_len)
-            + <[u16; 3] as flat_serialize::FlatSerializable>::len(&array)
-            + (<_ as flat_serialize::Slice<'_>>::len(&data, (data_len) as usize))
-            + (<_ as flat_serialize::Slice<'_>>::len(&data2, ((data_len) / 3) as usize))
+            + <u64 as flat_serialize::FlatSerializable>::len(header)
+            + <u32 as flat_serialize::FlatSerializable>::len(data_len)
+            + <[u16; 3] as flat_serialize::FlatSerializable>::len(array)
+            + (<_ as flat_serialize::Slice<'_>>::len(data, (*data_len) as usize))
+            + (<_ as flat_serialize::Slice<'_>>::len(data2, ((*data_len) / 3) as usize))
     }
 }
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Optional {
     pub header: u64,
     pub optional_field: Option<u32>,
@@ -535,7 +537,7 @@ unsafe impl<'a> flat_serialize::FlatSerializable<'a> for Optional {
     ) -> &'out mut [std::mem::MaybeUninit<u8>] {
         let total_len = self.len();
         let (mut input, rem) = input.split_at_mut(total_len);
-        let &Optional {
+        let Optional {
             header,
             optional_field,
             non_optional_field,
@@ -544,7 +546,7 @@ unsafe impl<'a> flat_serialize::FlatSerializable<'a> for Optional {
             input = header.fill_slice(input);
         };
         unsafe {
-            if (header) != 1 {
+            if (*header) != 1 {
                 let optional_field: &u32 = optional_field.as_ref().unwrap();
                 input = optional_field.fill_slice(input);
             }
@@ -558,22 +560,22 @@ unsafe impl<'a> flat_serialize::FlatSerializable<'a> for Optional {
     #[allow(unused_assignments, unused_variables)]
     #[inline(always)]
     fn len(&self) -> usize {
-        let &Optional {
+        let Optional {
             header,
             optional_field,
             non_optional_field,
         } = self;
         0usize
-            + <u64 as flat_serialize::FlatSerializable>::len(&header)
-            + (if (header) != 1 {
+            + <u64 as flat_serialize::FlatSerializable>::len(header)
+            + (if (*header) != 1 {
                 <u32 as flat_serialize::FlatSerializable>::len(optional_field.as_ref().unwrap())
             } else {
                 0
             })
-            + <u16 as flat_serialize::FlatSerializable>::len(&non_optional_field)
+            + <u16 as flat_serialize::FlatSerializable>::len(non_optional_field)
     }
 }
-#[derive(Copy, Clone, Debug)]
+#[derive(Clone, Debug)]
 pub struct Nested<'a> {
     pub prefix: u64,
     pub basic: Basic<'a>,
@@ -719,7 +721,7 @@ unsafe impl<'a> flat_serialize::FlatSerializable<'a> for Nested<'a> {
     ) -> &'out mut [std::mem::MaybeUninit<u8>] {
         let total_len = self.len();
         let (mut input, rem) = input.split_at_mut(total_len);
-        let &Nested { prefix, basic } = self;
+        let Nested { prefix, basic } = self;
         unsafe {
             input = prefix.fill_slice(input);
         };
@@ -732,13 +734,13 @@ unsafe impl<'a> flat_serialize::FlatSerializable<'a> for Nested<'a> {
     #[allow(unused_assignments, unused_variables)]
     #[inline(always)]
     fn len(&self) -> usize {
-        let &Nested { prefix, basic } = self;
+        let Nested { prefix, basic } = self;
         0usize
-            + <u64 as flat_serialize::FlatSerializable>::len(&prefix)
-            + <Basic as flat_serialize::FlatSerializable>::len(&basic)
+            + <u64 as flat_serialize::FlatSerializable>::len(prefix)
+            + <Basic as flat_serialize::FlatSerializable>::len(basic)
     }
 }
-#[derive(Copy, Clone, Debug)]
+#[derive(Clone, Debug)]
 pub struct NestedOptional {
     pub present: u64,
     pub val: Option<Optional>,
@@ -903,12 +905,12 @@ unsafe impl<'a> flat_serialize::FlatSerializable<'a> for NestedOptional {
     ) -> &'out mut [std::mem::MaybeUninit<u8>] {
         let total_len = self.len();
         let (mut input, rem) = input.split_at_mut(total_len);
-        let &NestedOptional { present, val } = self;
+        let NestedOptional { present, val } = self;
         unsafe {
             input = present.fill_slice(input);
         };
         unsafe {
-            if (present) > 2 {
+            if (*present) > 2 {
                 let val: &Optional = val.as_ref().unwrap();
                 input = val.fill_slice(input);
             }
@@ -919,17 +921,17 @@ unsafe impl<'a> flat_serialize::FlatSerializable<'a> for NestedOptional {
     #[allow(unused_assignments, unused_variables)]
     #[inline(always)]
     fn len(&self) -> usize {
-        let &NestedOptional { present, val } = self;
+        let NestedOptional { present, val } = self;
         0usize
-            + <u64 as flat_serialize::FlatSerializable>::len(&present)
-            + (if (present) > 2 {
+            + <u64 as flat_serialize::FlatSerializable>::len(present)
+            + (if (*present) > 2 {
                 <Optional as flat_serialize::FlatSerializable>::len(val.as_ref().unwrap())
             } else {
                 0
             })
     }
 }
-#[derive(Copy, Clone, Debug)]
+#[derive(Clone, Debug)]
 pub struct NestedSlice<'b> {
     pub num_vals: u64,
     pub vals: <Optional as flat_serialize::FlatSerializable<'b>>::SLICE,
@@ -1085,13 +1087,13 @@ unsafe impl<'b> flat_serialize::FlatSerializable<'b> for NestedSlice<'b> {
     ) -> &'out mut [std::mem::MaybeUninit<u8>] {
         let total_len = self.len();
         let (mut input, rem) = input.split_at_mut(total_len);
-        let &NestedSlice { num_vals, vals } = self;
+        let NestedSlice { num_vals, vals } = self;
         unsafe {
             input = num_vals.fill_slice(input);
         };
         unsafe {
-            let count = (num_vals) as usize;
-            input = <_ as flat_serialize::Slice<'_>>::fill_slice(&vals, count, input);
+            let count = (*num_vals) as usize;
+            input = <_ as flat_serialize::Slice<'_>>::fill_slice(vals, count, input);
         }
         debug_assert_eq!(input.len(), 0);
         rem
@@ -1099,13 +1101,13 @@ unsafe impl<'b> flat_serialize::FlatSerializable<'b> for NestedSlice<'b> {
     #[allow(unused_assignments, unused_variables)]
     #[inline(always)]
     fn len(&self) -> usize {
-        let &NestedSlice { num_vals, vals } = self;
+        let NestedSlice { num_vals, vals } = self;
         0usize
-            + <u64 as flat_serialize::FlatSerializable>::len(&num_vals)
-            + (<_ as flat_serialize::Slice<'_>>::len(&vals, (num_vals) as usize))
+            + <u64 as flat_serialize::FlatSerializable>::len(num_vals)
+            + (<_ as flat_serialize::Slice<'_>>::len(vals, (*num_vals) as usize))
     }
 }
-#[derive(Copy, Clone, Debug)]
+#[derive(Clone, Debug)]
 pub enum BasicEnum<'input> {
     First {
         data_len: u32,
@@ -1469,7 +1471,7 @@ unsafe impl<'input> flat_serialize::FlatSerializable<'input> for BasicEnum<'inpu
         let total_len = self.len();
         let (mut input, rem) = input.split_at_mut(total_len);
         match self {
-            &BasicEnum::First { data_len, data } => {
+            BasicEnum::First { data_len, data } => {
                 let k: &u64 = &2;
                 unsafe {
                     input = k.fill_slice(input);
@@ -1478,11 +1480,11 @@ unsafe impl<'input> flat_serialize::FlatSerializable<'input> for BasicEnum<'inpu
                     input = data_len.fill_slice(input);
                 };
                 unsafe {
-                    let count = (data_len) as usize;
-                    input = <_ as flat_serialize::Slice<'_>>::fill_slice(&data, count, input);
+                    let count = (*data_len) as usize;
+                    input = <_ as flat_serialize::Slice<'_>>::fill_slice(data, count, input);
                 }
             }
-            &BasicEnum::Fixed { array } => {
+            BasicEnum::Fixed { array } => {
                 let k: &u64 = &3;
                 unsafe {
                     input = k.fill_slice(input);
@@ -1498,19 +1500,19 @@ unsafe impl<'input> flat_serialize::FlatSerializable<'input> for BasicEnum<'inpu
     #[allow(unused_assignments, unused_variables)]
     fn len(&self) -> usize {
         match self {
-            &BasicEnum::First { data_len, data } => {
+            BasicEnum::First { data_len, data } => {
                 ::std::mem::size_of::<u64>()
-                    + <u32 as flat_serialize::FlatSerializable>::len(&data_len)
-                    + (<_ as flat_serialize::Slice<'_>>::len(&data, (data_len) as usize))
+                    + <u32 as flat_serialize::FlatSerializable>::len(data_len)
+                    + (<_ as flat_serialize::Slice<'_>>::len(data, (*data_len) as usize))
             }
-            &BasicEnum::Fixed { array } => {
+            BasicEnum::Fixed { array } => {
                 ::std::mem::size_of::<u64>()
-                    + <[u16; 3] as flat_serialize::FlatSerializable>::len(&array)
+                    + <[u16; 3] as flat_serialize::FlatSerializable>::len(array)
             }
         }
     }
 }
-#[derive(Copy, Clone, Debug)]
+#[derive(Clone, Debug)]
 pub enum PaddedEnum<'input> {
     First {
         padding: [u8; 3],
@@ -1957,7 +1959,7 @@ unsafe impl<'input> flat_serialize::FlatSerializable<'input> for PaddedEnum<'inp
         let total_len = self.len();
         let (mut input, rem) = input.split_at_mut(total_len);
         match self {
-            &PaddedEnum::First {
+            PaddedEnum::First {
                 padding,
                 data_len,
                 data,
@@ -1973,11 +1975,11 @@ unsafe impl<'input> flat_serialize::FlatSerializable<'input> for PaddedEnum<'inp
                     input = data_len.fill_slice(input);
                 };
                 unsafe {
-                    let count = (data_len) as usize;
-                    input = <_ as flat_serialize::Slice<'_>>::fill_slice(&data, count, input);
+                    let count = (*data_len) as usize;
+                    input = <_ as flat_serialize::Slice<'_>>::fill_slice(data, count, input);
                 }
             }
-            &PaddedEnum::Fixed { padding, array } => {
+            PaddedEnum::Fixed { padding, array } => {
                 let k: &u8 = &3;
                 unsafe {
                     input = k.fill_slice(input);
@@ -1996,20 +1998,20 @@ unsafe impl<'input> flat_serialize::FlatSerializable<'input> for PaddedEnum<'inp
     #[allow(unused_assignments, unused_variables)]
     fn len(&self) -> usize {
         match self {
-            &PaddedEnum::First {
+            PaddedEnum::First {
                 padding,
                 data_len,
                 data,
             } => {
                 ::std::mem::size_of::<u8>()
-                    + <[u8; 3] as flat_serialize::FlatSerializable>::len(&padding)
-                    + <u32 as flat_serialize::FlatSerializable>::len(&data_len)
-                    + (<_ as flat_serialize::Slice<'_>>::len(&data, (data_len) as usize))
+                    + <[u8; 3] as flat_serialize::FlatSerializable>::len(padding)
+                    + <u32 as flat_serialize::FlatSerializable>::len(data_len)
+                    + (<_ as flat_serialize::Slice<'_>>::len(data, (*data_len) as usize))
             }
-            &PaddedEnum::Fixed { padding, array } => {
+            PaddedEnum::Fixed { padding, array } => {
                 ::std::mem::size_of::<u8>()
-                    + <u8 as flat_serialize::FlatSerializable>::len(&padding)
-                    + <[u16; 3] as flat_serialize::FlatSerializable>::len(&array)
+                    + <u8 as flat_serialize::FlatSerializable>::len(padding)
+                    + <[u16; 3] as flat_serialize::FlatSerializable>::len(array)
             }
         }
     }

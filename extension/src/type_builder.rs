@@ -89,7 +89,7 @@ macro_rules! pg_type_impl {
     ) => {
         ::paste::paste! {
             $(#[$attrs])*
-            #[derive(pgx::PostgresType, Copy, Clone)]
+            #[derive(pgx::PostgresType, Clone)]
             #[inoutfuncs]
             pub struct $name<$lifetemplate>([<$name Data>] $(<$inlife>)?, Option<&$lifetemplate [u8]>);
 
@@ -111,10 +111,10 @@ macro_rules! pg_type_impl {
             }
 
             impl<'input> $name<'input> {
-                pub fn in_current_context(&self) -> $name<'static> {
+                pub fn in_current_context<'foo>(&self) -> $name<'foo> {
                     unsafe { self.0.flatten() }
                 }
-            } 
+            }
 
             impl<$lifetemplate> [<$name Data>] $(<$inlife>)? {
                 pub unsafe fn flatten<'any>(&self) -> $name<'any> {

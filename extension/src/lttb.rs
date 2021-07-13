@@ -175,7 +175,10 @@ pub fn lttb_on_timeseries(
 }
 
 // based on https://github.com/jeromefroe/lttb-rs version 0.2.0
-pub fn lttb_ts (data: crate::time_series::toolkit_experimental::TimeSeries<'static>, threshold: usize)
+pub fn lttb_ts<'s>(
+    data: crate::time_series::toolkit_experimental::TimeSeries<'s>,
+    threshold: usize
+)
 -> crate::time_series::toolkit_experimental::TimeSeries<'static>
 {
     if !data.is_sorted() {
@@ -184,7 +187,7 @@ pub fn lttb_ts (data: crate::time_series::toolkit_experimental::TimeSeries<'stat
 
     if threshold >= data.num_points() || threshold == 0 {
         // Nothing to do.
-        return data.clone();  // can we avoid this copy???
+        return data.in_current_context();  // can we avoid this copy???
     }
 
     // let mut sampled = Vec::with_capacity(threshold);

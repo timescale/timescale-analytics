@@ -150,18 +150,35 @@ where T: FlatSerializable<'i> + 'i {
 }
 
 
-pub enum Iterable<'input, T: 'input> {
+pub enum Iterable<'input, T: 'input,> {
     Iter(Iter<'input, T>),
-    Slice(&'input [T])
+    Slice(&'input [T]),
+    Owned(Vec<T>),
 }
 
-impl<'input, T: 'input> Iterator for Iterable<'input, T>
+impl <'input, T: 'input> Iterable<'input, T> {
+    pub fn iter<'s>(&'s self) -> I<'s, T>
+    where 'input: 's {
+        match self {
+            Iterable::Iter(iter) => I::Iter(*iter),
+            Iterable::Slice(slice) => I::Slice(slice),
+            Iterable::Owned(vec) => I::Slice(&*vec),
+        }
+    }
+}
+
+pub enum I<'input, T: 'input,> {
+    Iter(Iter<'input, T>),
+    Slice(&'input [T]),
+}
+
+impl<'input, T: 'input> Iterator for I<'input, T>
 where T: FlatSerializable<'input> + Clone {
     type Item = T;
 
     fn next(&mut self) -> Option<Self::Item> {
         match self {
-            Iterable::Iter(i) => {
+            Self::Iter(i) => {
                 if i.slice.is_empty() {
                     return None
                 }
@@ -173,7 +190,7 @@ where T: FlatSerializable<'input> + Clone {
                 i.slice = &rem[additional_len..];
                 return Some(val)
             },
-            Iterable::Slice(s) => {
+            Self::Slice(s) => {
                 let val = s.first().cloned();
                 if val.is_some() {
                     *s = &s[1..]
@@ -185,17 +202,17 @@ where T: FlatSerializable<'input> + Clone {
     }
 }
 
-impl<'i, T> fmt::Debug for Iterable<'i, T>
-where T: fmt::Debug + FlatSerializable<'i> + Clone {
+impl<'i, T: 'i> fmt::Debug for Iterable<'i, T>
+where T: fmt::Debug + for<'s> FlatSerializable<'s> + Clone {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_list().entries(*self).finish()
+        f.debug_list().entries(self.iter()).finish()
     }
 }
 
 impl<'i, T: 'i> PartialEq for Iterable<'i, T>
-where T: FlatSerializable<'i> + Clone + PartialEq {
+where T: for<'s> FlatSerializable<'s> + Clone + PartialEq {
     fn eq(&self, other: &Self) -> bool {
-        <Self as Iterator>::eq(*self, *other)
+        <I<'_, T> as Iterator>::eq(self.iter(), other.iter())
     }
 }
 
@@ -236,13 +253,42 @@ impl<'input, T: 'input> From<&'input [T]> for Iterable<'input, T> {
     }
 }
 
-impl<'input, T: 'input> Clone for Iterable<'input, T> {
+impl<'input, T: 'input> Clone for Iterable<'input, T>
+where T: Clone {
     fn clone(&self) -> Self {
-        *self
+        match self {
+            Iterable::Iter(i) => Iterable::Iter(*i),
+            Iterable::Slice(s) => Iterable::Slice(&*s),
+            Iterable::Owned(v) => Iterable::Owned(Vec::clone(v)),
+        }
     }
 }
 
-impl<'input, T: 'input> Copy for Iterable<'input, T> {}
+impl<'i, T> serde::Serialize for Iterable<'i, T>
+where T: serde::Serialize + Clone + for<'t> FlatSerializable<'t> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer {
+        use serde::ser::SerializeSeq;
+
+        // TODO len should be computable
+        let mut s = serializer.serialize_seq(None)?;
+        for t in self.iter() {
+            s.serialize_element(&t)?
+        }
+        s.end()
+    }
+}
+
+impl<'de, T> serde::Deserialize<'de> for Iterable<'static, T>
+where T: serde::Deserialize<'de> {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de> {
+        let v = Vec::deserialize(deserializer)?;
+        Ok(Self::Owned(v))
+    }
+}
 
 impl<'input, T: 'input> Clone for Iter<'input, T> {
     fn clone(&self) -> Self {
@@ -308,7 +354,7 @@ where T: FlatSerializable<'i> {
 }
 
 unsafe impl<'i, T: 'i> Slice<'i> for Iterable<'i, T>
-where T: FlatSerializable<'i> + Clone {
+where T: for<'s> FlatSerializable<'s> + Clone {
     #[inline(always)]
     unsafe fn try_ref(input: &'i [u8], count: usize) -> Result<(Self, &'i [u8]), WrapErr> {
         if T::TRIVIAL_COPY {
@@ -351,7 +397,7 @@ where T: FlatSerializable<'i> + Clone {
         if let (true, Self::Slice(values)) = (T::TRIVIAL_COPY, self) {
             return <&[T]>::fill_slice(values, count, input)
         }
-        fill_slice_from_iter(*self, count, input)
+        fill_slice_from_iter(self.iter(), count, input)
     }
 
     #[inline(always)]
@@ -359,7 +405,7 @@ where T: FlatSerializable<'i> + Clone {
         if let (true, Self::Slice(values)) = (T::TRIVIAL_COPY, self) {
             return <&[T]>::len(values, count)
         }
-        len_of_iterable(*self, count)
+        len_of_iterable(self.iter(), count)
     }
 }
 
@@ -469,13 +515,13 @@ mod tests {
             rem,
         ) = unsafe { Basic::try_ref(&bytes).unwrap() };
         assert_eq!(
-            (header, data_len, array, data, data2, rem),
+            (header, data_len, array, data, &data2, rem),
             (
                 33,
                 6,
                 [202, 404, 555],
                 &[1, 3, 5, 7, 9, 11][..],
-                Iterable::Slice(&[[4, 4], [95, 99]]),
+                &Iterable::Slice(&[[4, 4], [95, 99]]),
                 &[][..]
             )
         );
@@ -486,7 +532,7 @@ mod tests {
             header,
             data_len,
             data,
-            data2,
+            data2: data2.clone(),
             array,
         }
         .fill_vec(&mut output);
@@ -685,14 +731,14 @@ mod tests {
             rem,
         ) = unsafe { Nested::try_ref(&bytes).unwrap() };
         assert_eq!(
-            (prefix, header, data_len, array, data, data2, rem),
+            (prefix, header, data_len, array, data, &data2, rem),
             (
                 101010101,
                 33,
                 6,
                 [202, 404, 555],
                 &[1, 3, 5, 7, 9, 11][..],
-                Iterable::Slice(&[[3, 0], [104, 2]]),
+                &Iterable::Slice(&[[3, 0], [104, 2]]),
                 &[][..]
             )
         );
@@ -744,10 +790,10 @@ mod tests {
         };
 
         assert_eq!(
-            (present, val, rem),
+            (present, &val, rem),
             (
                 3,
-                Some(Optional {
+                &Some(Optional {
                     header: 0,
                     optional_field: Some(111111111),
                     non_optional_field: 0xf00f,
@@ -808,7 +854,7 @@ mod tests {
         let (NestedSlice { num_vals, vals }, rem) = unsafe {
             NestedSlice::try_ref(&bytes).unwrap()
         };
-        let vals_vec: Vec<_> = vals.clone().collect();
+        let vals_vec: Vec<_> = vals.iter().collect();
         assert_eq!(
             (num_vals, &*vals_vec, rem),
             (
