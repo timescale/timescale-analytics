@@ -2,7 +2,7 @@
 pub mod delta {
     use crate::zigzag;
 
-    pub fn i64_decoder() -> impl FnMut(i64) -> i64{
+    pub fn i64_decoder() -> impl FnMut(i64) -> i64 {
         let mut prev = 0i64;
         move |delta| {
             let value = prev.wrapping_add(delta);
@@ -189,6 +189,10 @@ pub mod prefix_varint {
 
         pub fn finish(self) -> Vec<u8> {
             self.bytes
+        }
+
+        pub fn is_empty(&self) -> bool {
+            self.bytes.is_empty()
         }
     }
 

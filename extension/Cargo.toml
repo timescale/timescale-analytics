@@ -21,7 +21,7 @@ encodings = {path="../crates/encodings"}
 flat_serialize = {path="../crates/flat_serialize/flat_serialize"}
 flat_serialize_macro = {path="../crates/flat_serialize/flat_serialize_macro"}
 tdigest = {path="../crates/t-digest"}
-hyperloglog = {path="../crates/hyperloglog"}
+hyperloglogplusplus = {path="../crates/hyperloglogplusplus"}
 uddsketch = {path="../crates/udd-sketch"}
 counter-agg = {path="../crates/counter-agg"}
 stats_agg = {path="../crates/stats-agg"}
